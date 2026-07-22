@@ -22,14 +22,17 @@ tasks_del(struct sched_task *task)
     struct sched_task *entry;
 
     lock_acquire(&lock);
-    if (tasks == task) {
+    if (tasks == task)
+    {
         tasks = task->next;
         task->next = NULL;
         lock_release(&lock);
         return;
     }
-    for (entry = tasks; entry; entry = entry->next) {
-        if (entry->next == task) {
+    for (entry = tasks; entry; entry = entry->next)
+    {
+        if (entry->next == task)
+        {
             entry->next = task->next;
             task->next = NULL;
             break;
@@ -38,8 +41,7 @@ tasks_del(struct sched_task *task)
     lock_release(&lock);
 }
 
-int
-sched_task_init(struct sched_task *task)
+int sched_task_init(struct sched_task *task)
 {
     task->next = NULL;
     pthread_cond_init(&task->cond, NULL);
@@ -48,35 +50,40 @@ sched_task_init(struct sched_task *task)
     return 0;
 }
 
-int
-sched_task_destroy(struct sched_task *task)
+int sched_task_destroy(struct sched_task *task)
 {
-    if (task->wc) {
+    if (task->wc)
+    {
         return -1;
     }
     return pthread_cond_destroy(&task->cond);
 }
 
-int
-sched_task_sleep(struct sched_task *task, lock_t *lock, const struct timespec *abstime)
+int sched_task_sleep(struct sched_task *task, lock_t *lock, const struct timespec *abstime)
 {
     int ret;
 
-    if (task->interrupted) {
+    if (task->interrupted)
+    {
         errno = EINTR;
         return -1;
     }
     task->wc++;
     tasks_add(task);
-    if (abstime) {
+    if (abstime)
+    {
         ret = pthread_cond_timedwait(&task->cond, lock, abstime);
-    } else {
+    }
+    else
+    {
         ret = pthread_cond_wait(&task->cond, lock);
     }
     tasks_del(task);
     task->wc--;
-    if (task->interrupted) {
-        if (!task->wc) {
+    if (task->interrupted)
+    {
+        if (!task->wc)
+        {
             task->interrupted = 0;
         }
         errno = EINTR;
@@ -85,8 +92,7 @@ sched_task_sleep(struct sched_task *task, lock_t *lock, const struct timespec *a
     return ret;
 }
 
-int
-sched_task_wakeup(struct sched_task *task)
+int sched_task_wakeup(struct sched_task *task)
 {
     return pthread_cond_broadcast(&task->cond);
 }
@@ -99,8 +105,10 @@ sched_irq_handler(unsigned int irq, void *arg)
     (void)irq;
     (void)arg;
     lock_acquire(&lock);
-    for (task = tasks; task; task = task->next) {
-        if (!task->interrupted) {
+    for (task = tasks; task; task = task->next)
+    {
+        if (!task->interrupted)
+        {
             task->interrupted = 1;
             pthread_cond_broadcast(&task->cond);
         }
@@ -108,21 +116,18 @@ sched_irq_handler(unsigned int irq, void *arg)
     lock_release(&lock);
 }
 
-int
-sched_init(void)
+int sched_init(void)
 {
     return intr_register(INTR_IRQ_USER, sched_irq_handler, 0, NULL);
 }
 
-int
-sched_run(void)
+int sched_run(void)
 {
     /* do nothing */
     return 0;
 }
 
-int
-sched_shutdown(void)
+int sched_shutdown(void)
 {
     /* do nothing */
     return 0;

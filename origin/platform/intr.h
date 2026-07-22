@@ -3,11 +3,11 @@
 
 #include <signal.h>
 
-#define INTR_IRQ_SOFT  SIGUSR1
-#define INTR_IRQ_USER  SIGUSR2
+#define INTR_IRQ_SOFT SIGUSR1
+#define INTR_IRQ_USER SIGUSR2
 #define INTR_IRQ_TIMER SIGALRM
 
-#define INTR_IRQ_BASE (SIGRTMIN+1)
+#define INTR_IRQ_BASE (SIGRTMIN + 1)
 
 #define INTR_IRQ_SHARED 0x0001
 

@@ -4,7 +4,8 @@
 #include <pthread.h>
 #include <time.h>
 
-struct sched_task {
+struct sched_task
+{
     struct sched_task *next;
     pthread_cond_t cond;
     int interrupted;

@@ -8,21 +8,18 @@
 
 #include "util.h"
 
-int
-platform_init(void)
+int platform_init(void)
 {
     srandom(time(NULL));
     return 0;
 }
 
-int
-platform_run(void)
+int platform_run(void)
 {
     return 0;
 }
 
-int
-platform_shutdown(void)
+int platform_shutdown(void)
 {
     return 0;
 }
@@ -37,8 +34,7 @@ memory_alloc(size_t size)
     return calloc(1, size);
 }
 
-void
-memory_free(void *ptr)
+void memory_free(void *ptr)
 {
     free(ptr);
 }
@@ -47,20 +43,17 @@ memory_free(void *ptr)
  * Lock
  */
 
-int
-lock_init(lock_t *lock)
+int lock_init(lock_t *lock)
 {
     return pthread_mutex_init(lock, NULL);
 }
 
-int
-lock_acquire(lock_t *lock)
+int lock_acquire(lock_t *lock)
 {
     return pthread_mutex_lock(lock);
 }
 
-int
-lock_release(lock_t *lock)
+int lock_release(lock_t *lock)
 {
     return pthread_mutex_unlock(lock);
 }
@@ -72,5 +65,5 @@ lock_release(lock_t *lock)
 uint16_t
 random16(void)
 {
-    return random() % (UINT16_MAX+1);
+    return random() % (UINT16_MAX + 1);
 }
