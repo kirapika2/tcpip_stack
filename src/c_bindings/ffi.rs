@@ -14,4 +14,6 @@ extern "C" {
     pub fn memory_free(ptr: *mut c_void);
 
     pub fn random16() -> u16;
+
+    pub fn hexdump_stderr(data: *const c_void, size: usize);
 }

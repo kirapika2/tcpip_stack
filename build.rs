@@ -11,6 +11,10 @@ fn main() {
         .flag("-Wall")
         .flag("-Wno-unused-parameter");
 
+    if env::var_os("CARGO_FEATURE_HEXDUMP").is_some() {
+        build.define("HEXDUMP", None);
+    }
+
     // インクルードパス
     // -iquote を使用してプロジェクトのヘッダーを優先
     // ccクレートでは.include()で-Iを使うので、手動で-iquoteフラグを追加する必要がある

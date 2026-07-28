@@ -86,6 +86,11 @@ void hexdump(FILE *fp, const void *data, size_t size)
     funlockfile(fp);
 }
 
+void hexdump_stderr(const void *data, size_t size)
+{
+    hexdump(stderr, data, size);
+}
+
 /*
  * Queue
  */

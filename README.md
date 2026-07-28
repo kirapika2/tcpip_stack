@@ -21,6 +21,8 @@ cargo build --release
 cargo build
 ```
 
+`HEXDUMP` オプションを指定する場合は、`--features hexdump` をつける
+
 ### 実行
 
 ```bash

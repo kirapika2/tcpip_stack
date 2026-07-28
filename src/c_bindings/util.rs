@@ -99,3 +99,19 @@ macro_rules! log_debug {
         );
     }};
 }
+
+#[cfg(feature = "hexdump")]
+#[macro_export]
+macro_rules! debugdump {
+    ($data:expr) => {{
+        unsafe {
+            $crate::c_bindings::ffi::hexdump_stderr(($data).as_ptr().cast(), ($data).len());
+        }
+    }};
+}
+
+#[cfg(not(feature = "hexdump"))]
+#[macro_export]
+macro_rules! debugdump {
+    ($($arg:tt)*) => {{}};
+}
