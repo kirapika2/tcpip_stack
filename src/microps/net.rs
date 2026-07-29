@@ -1,3 +1,6 @@
+use std::ffi::CStr;
+use std::sync::atomic::AtomicU32;
+
 use crate::Platform;
 
 pub const NET_DEVICE_TYPE_DUMMY: u16 = 0x0000;
@@ -58,12 +61,10 @@ impl Default for NetDevice {
 // name の char 配列を string として返す
 impl NetDevice {
     fn name(&self) -> &str {
-        let name = self
-            .name
-            .split(|&byte| byte == 0 /* 0 で区切る */)
-            .next()
-            .unwrap();
-        std::str::from_utf8(name).unwrap_or("<invalid>")
+        CStr::from_bytes_until_nul(&self.name)
+            .ok()
+            .and_then(|name| name.to_str().ok())
+            .unwrap_or("<invalid>")
     }
 }
 
@@ -77,11 +78,12 @@ pub fn net_device_alloc() -> Box<NetDevice> {
 
 // ネットワークデバイスの登録
 pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<(), i32> {
-    static mut device_index: u32 = 0;
+    #[allow(non_upper_case_globals)]
+    static device_index: AtomicU32 = AtomicU32::new(0);
 
     unsafe {
-        device_index += 1;
-        dev.index = device_index;
+        device_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed); // 値の原子性を確保してインクリメント
+        dev.index = device_index.load(std::sync::atomic::Ordering::Relaxed);
 
         // name フィールド長にあわせたデバイス名を設定
         let name = format!("net{}", dev.index);
@@ -163,7 +165,15 @@ pub fn net_device_output_by_name(
     unsafe {
         let mut dev = devices;
         while !dev.is_null() {
-            let device_name = (*dev).name.split(|&byte| byte == 0).next().unwrap();
+            let device_name = match CStr::from_bytes_until_nul(&(*dev).name) {
+                Ok(device_name) => device_name.to_bytes(),
+                Err(_) => {
+                    // 基本、デバイス名に null が含まれていなかったとき
+                    // これは 16 バイト以上の名前でのみ発生
+                    dev = (*dev).next;
+                    continue;
+                }
+            };
             if device_name == name {
                 return net_device_output(&mut *dev, device_type, data, dst);
             }
