@@ -22,3 +22,5 @@ target
 
 # AI 生成サンプル
 net_sample/
+
+.vscode/

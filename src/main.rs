@@ -1,6 +1,7 @@
 // テスト実行プログラム
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use tcpip_stack::driver::loopback;
 use tcpip_stack::microps::net;
 use tcpip_stack::{log_debug, log_error, log_info};
 
@@ -32,26 +33,12 @@ fn install_signal_handler() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-// ダミーデバイス登録
-pub fn dummy_init() -> Result<(), i32> {
-    let mut dev = net::net_device_alloc();
-    dev.device_type = net::NET_DEVICE_TYPE_DUMMY;
-    dev.mtu = 128;
-    dev.hlen = 0;
-    dev.alen = 0;
-    net::net_device_register(dev).map_err(|error| {
-        log_error!("net_device_register() failed: {error}");
-        error
-    })?;
-    Ok(())
-}
-
 // プロトコルスタックの事前準備
 fn setup() -> Result<(), String> {
     install_signal_handler().map_err(|error| format!("sigaction() {error}"))?;
     log_info!("setup protocol stack...");
     net::net_init().map_err(|error| format!("net_init() failed: {error}"))?;
-    dummy_init().map_err(|error| format!("dummy_init() failed: {error}"))?;
+    loopback::loopback_init().map_err(|error| format!("loopback_init() failed: {error}"))?;
     net::net_run().map_err(|error| format!("net_run() failed: {error}"))?;
     Ok(())
 }

@@ -20,6 +20,7 @@ macro_rules! up_flag {
         $x.flags & NET_DEVICE_FLAG_UP != 0
     };
 }
+#[allow(unused_macros)]
 macro_rules! state {
     ($x:expr) => {
         up_flag!($x) ? "UP" : "DOWN"
@@ -27,17 +28,29 @@ macro_rules! state {
 }
 
 // ネットワークデバイス
+#[allow(dead_code)]
 pub struct NetDevice {
     next: *mut NetDevice,
     index: u32,
     name: [u8; 16],
     pub device_type: u16,
     pub mtu: u16,
-    flags: u16,
+    pub flags: u16,
     pub hlen: u16,
     pub alen: u16,
     addr: [u8; NET_DEVICE_ADDR_LEN],
     broadcast: [u8; NET_DEVICE_ADDR_LEN],
+    pub ops: Option<&'static NetDeviceOps>,
+    private_data: Option<Box<dyn std::any::Any>>,
+}
+
+// デバイスドライバの制御ルーチン
+pub struct NetDeviceOps {
+    pub open: Option<fn(dev: &mut NetDevice) -> Result<(), i32>>,
+    pub close: Option<fn(dev: &mut NetDevice) -> Result<(), i32>>,
+    pub output: Option<
+        fn(dev: &mut NetDevice, device_type: u16, data: &[u8], dst: &[u8]) -> Result<(), i32>,
+    >,
 }
 
 // Rust ベースでデフォルト値を設定
@@ -54,13 +67,15 @@ impl Default for NetDevice {
             alen: 0,
             addr: [0; NET_DEVICE_ADDR_LEN],
             broadcast: [0; NET_DEVICE_ADDR_LEN],
+            ops: None,
+            private_data: None,
         }
     }
 }
 
 // name の char 配列を string として返す
 impl NetDevice {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         CStr::from_bytes_until_nul(&self.name)
             .ok()
             .and_then(|name| name.to_str().ok())
@@ -77,36 +92,45 @@ pub fn net_device_alloc() -> Box<NetDevice> {
 }
 
 // ネットワークデバイスの登録
-pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<(), i32> {
+// 登録されたデバイスはスタック内で管理され、アプリケーションからは名前でアクセスされる
+pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDevice, i32> {
     #[allow(non_upper_case_globals)]
     static device_index: AtomicU32 = AtomicU32::new(0);
 
-    unsafe {
-        device_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed); // 値の原子性を確保してインクリメント
-        dev.index = device_index.load(std::sync::atomic::Ordering::Relaxed);
+    device_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed); // 値の原子性を確保してインクリメント
+    dev.index = device_index.load(std::sync::atomic::Ordering::Relaxed);
 
-        // name フィールド長にあわせたデバイス名を設定
-        let name = format!("net{}", dev.index);
-        let name = name.as_bytes();
-        if name.len() >= dev.name.len() {
-            crate::log_error!("device name is too long");
-            return Err(-1);
-        }
-        dev.name[..name.len()].copy_from_slice(name);
-
-        dev.next = devices;
-        crate::log_info!("success, dev={}, type={:#06x}", dev.name(), dev.device_type);
-        devices = Box::into_raw(dev);
+    // name フィールド長にあわせたデバイス名を設定
+    let name = format!("net{}", dev.index);
+    let name = name.as_bytes();
+    if name.len() >= dev.name.len() {
+        crate::log_error!("net_device_register: device name is too long");
+        // dev はここで drop されて、ヒープ領域が解放
+        return Err(-1);
     }
+    dev.name[..name.len()].copy_from_slice(name);
 
-    Ok(())
+    crate::log_info!(
+        "net_device_register: success, dev={}, type={:#06x}",
+        dev.name(),
+        dev.device_type
+    );
+
+    // Box を生ポインタに変換して所有権を手放し、リスト (static) の先頭に繋ぐ
+    // 以降このデバイスはスタックが管理し、プロセス終了まで生存する
+    let raw = Box::into_raw(dev);
+    unsafe {
+        (*raw).next = devices;
+        devices = raw;
+        Ok(&mut *raw) // 生ポインタを参照に変換して返す
+    }
 }
 
 // ネットワークデバイスの起動
 pub fn net_device_open(dev: &mut NetDevice /* 可変参照、所有権はもたない */) {
-    crate::log_info!("dev={}", dev.name());
+    crate::log_info!("net_device_open: dev={}", dev.name());
     if up_flag!(dev) {
-        crate::log_info!("already opened, dev={}", dev.name());
+        crate::log_info!("net_device_open: already opened, dev={}", dev.name());
         return;
     }
     dev.flags |= NET_DEVICE_FLAG_UP; // フラグを立てる
@@ -114,9 +138,9 @@ pub fn net_device_open(dev: &mut NetDevice /* 可変参照、所有権はもた�
 
 // ネットワークデバイスの停止
 pub fn net_device_close(dev: &mut NetDevice /* 可変参照、所有権はもたない */) {
-    crate::log_info!("dev={}", dev.name());
+    crate::log_info!("net_device_close: dev={}", dev.name());
     if !up_flag!(dev) {
-        crate::log_error!("already closed, dev={}", dev.name());
+        crate::log_error!("net_device_close: already closed, dev={}", dev.name());
         return;
     }
     dev.flags &= !NET_DEVICE_FLAG_UP; // フラグを下げる
@@ -130,7 +154,7 @@ fn net_device_output(
     dst: &[u8],
 ) -> Result<(), i32> {
     crate::log_debug!(
-        "dev={}, type={:#06x}, len={}",
+        "net_device_output: dev={}, type={:#06x}, len={}",
         dev.name(),
         device_type,
         data.len()
@@ -138,19 +162,51 @@ fn net_device_output(
     crate::debugdump!(data); // デバッグ時に 16 進ダンプ
 
     if !up_flag!(dev) {
-        crate::log_error!("device is down, dev={}", dev.name());
+        crate::log_error!("net_device_output: device is down, dev={}", dev.name());
         return Err(-1);
     }
 
     if dev.mtu < data.len() as u16 {
         crate::log_error!(
-            "too long, dev={}, mtu={}, len={}",
+            "net_device_output: too long, dev={}, mtu={}, len={}",
             dev.name(),
             dev.mtu,
             data.len()
         );
         return Err(-1);
     }
+
+    // 制御ルーチンを使ってデータ出力
+    match dev.ops {
+        Some(ops) => match ops.output {
+            Some(output) => output(dev, device_type, data, dst),
+            None => {
+                crate::log_error!(
+                    "net_device_output: ops.output is not supported, dev={}",
+                    dev.name()
+                );
+                Err(-1)
+            }
+        },
+        None => {
+            crate::log_error!(
+                "net_device_output: device operations are not set, dev={}",
+                dev.name()
+            );
+            Err(-1)
+        }
+    }
+}
+
+// ネットワークデバイスからのデータ入力
+pub fn net_input(device_type: u16, data: &[u8], dev: &NetDevice) -> Result<(), i32> {
+    crate::log_debug!(
+        "net_input: dev={}, type={:#06x}, len={}",
+        dev.name(),
+        device_type,
+        data.len()
+    );
+    crate::debugdump!(data);
     Ok(())
 }
 
@@ -181,20 +237,20 @@ pub fn net_device_output_by_name(
         }
     }
 
-    crate::log_error!("device not found: {:?}", name);
+    crate::log_error!("net_device_output_by_name: device not found: {:?}", name);
     Err(-1)
 }
 
 // 初期化
 pub fn net_init() -> Result<(), i32> {
-    crate::log_info!("initialize...");
+    crate::log_info!("net_init: initialize...");
     match Platform::init() {
         Ok(_) => {
-            crate::log_info!("success");
+            crate::log_info!("net_init: success");
             Ok(())
         }
         Err(e) => {
-            crate::log_error!("platform_init() failed: {}", e);
+            crate::log_error!("net_init: platform_init() failed: {}", e);
             Err(e)
         }
     }
@@ -202,7 +258,7 @@ pub fn net_init() -> Result<(), i32> {
 
 // 起動
 pub fn net_run() -> Result<(), i32> {
-    crate::log_info!("startup...");
+    crate::log_info!("net_run: startup...");
     match Platform::run() {
         Ok(_) => {
             // 順にデバイスを起動
@@ -214,11 +270,11 @@ pub fn net_run() -> Result<(), i32> {
                     dev = next;
                 }
             }
-            crate::log_info!("success");
+            crate::log_info!("net_run: success");
             Ok(())
         }
         Err(e) => {
-            crate::log_error!("platform_run() failed: {}", e);
+            crate::log_error!("net_run: platform_run() failed: {}", e);
             Err(e)
         }
     }
@@ -226,7 +282,7 @@ pub fn net_run() -> Result<(), i32> {
 
 // 終了
 pub fn net_shutdown() -> Result<(), i32> {
-    crate::log_info!("shutting down...");
+    crate::log_info!("net_shutdown: shutting down...");
     match Platform::shutdown() {
         Ok(_) => {
             // 順にデバイスを停止
@@ -238,11 +294,11 @@ pub fn net_shutdown() -> Result<(), i32> {
                     dev = next;
                 }
             }
-            crate::log_info!("success");
+            crate::log_info!("net_shutdown: success");
             Ok(())
         }
         Err(e) => {
-            crate::log_error!("platform_shutdown() failed: {}", e);
+            crate::log_error!("net_shutdown: platform_shutdown() failed: {}", e);
             Err(e)
         }
     }
