@@ -8,12 +8,12 @@
 // - トランスポート層（Transport Layer）- TCP、UDP
 // - アプリケーション層のサポート
 
+pub mod ip; // IPレイヤー
 pub mod net; // ネットワーク全般
 
 // 将来的に追加予定:
 // pub mod types;     // 共通の型定義
 // pub mod datalink;  // データリンク層
-// pub mod ip;        // IPレイヤー
 // pub mod icmp;      // ICMP
 // pub mod tcp;       // TCP
 // pub mod udp;       // UDP

@@ -1,6 +1,7 @@
 use std::ffi::CStr;
 use std::sync::atomic::AtomicU32;
 
+use crate::microps::ip;
 use crate::Platform;
 
 pub const NET_DEVICE_TYPE_DUMMY: u16 = 0x0000;
@@ -14,6 +15,10 @@ pub const NET_DEVICE_FLAG_P2P: u16 = 0x0040;
 pub const NET_DEVICE_FLAG_NEED_ARP: u16 = 0x0100;
 
 pub const NET_DEVICE_ADDR_LEN: usize = 16;
+
+pub const NET_PROTOCOL_TYPE_IP: u16 = 0x0800;
+pub const NET_PROTOCOL_TYPE_ARP: u16 = 0x0806;
+pub const NET_PROTOCOL_TYPE_IPV6: u16 = 0x86dd;
 
 macro_rules! up_flag {
     ($x:expr) => {
@@ -53,7 +58,19 @@ pub struct NetDeviceOps {
     >,
 }
 
+// ネットワークプロトコル
+struct NetProtocol {
+    next: *mut NetProtocol,
+    pub protocol_type: u16,
+    pub handler: NetProtocolHandler,
+}
+
+// プロトコルの入力処理
+pub type NetProtocolHandler = fn(data: &[u8], dev: &NetDevice);
+
 // Rust ベースでデフォルト値を設定
+// private_data など、サイズ不定のフィールドを持つため、Box を使ってヒープ上に確保する必要がある
+// 先にデフォルト値を設定してから、フィールドの値を埋める
 impl Default for NetDevice {
     fn default() -> Self {
         Self {
@@ -84,7 +101,9 @@ impl NetDevice {
 }
 
 #[allow(non_upper_case_globals)]
-static mut devices: *mut NetDevice = std::ptr::null_mut(); // 最初のデバイスのポインタ
+static mut devices: *mut NetDevice = std::ptr::null_mut(); // 最初のデバイスの生ポインタ
+#[allow(non_upper_case_globals)]
+static mut protocols: *mut NetProtocol = std::ptr::null_mut(); // 最初のプロトコルの生ポインタ
 
 // ネットワークデバイスの割り当て
 pub fn net_device_alloc() -> Box<NetDevice> {
@@ -127,7 +146,7 @@ pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDe
 }
 
 // ネットワークデバイスの起動
-pub fn net_device_open(dev: &mut NetDevice /* 可変参照、所有権はもたない */) {
+fn net_device_open(dev: &mut NetDevice /* 可変参照 */) {
     crate::log_info!("net_device_open: dev={}", dev.name());
     if up_flag!(dev) {
         crate::log_info!("net_device_open: already opened, dev={}", dev.name());
@@ -137,7 +156,7 @@ pub fn net_device_open(dev: &mut NetDevice /* 可変参照、所有権はもた�
 }
 
 // ネットワークデバイスの停止
-pub fn net_device_close(dev: &mut NetDevice /* 可変参照、所有権はもたない */) {
+fn net_device_close(dev: &mut NetDevice /* 可変参照 */) {
     crate::log_info!("net_device_close: dev={}", dev.name());
     if !up_flag!(dev) {
         crate::log_error!("net_device_close: already closed, dev={}", dev.name());
@@ -198,18 +217,6 @@ fn net_device_output(
     }
 }
 
-// ネットワークデバイスからのデータ入力
-pub fn net_input(device_type: u16, data: &[u8], dev: &NetDevice) -> Result<(), i32> {
-    crate::log_debug!(
-        "net_input: dev={}, type={:#06x}, len={}",
-        dev.name(),
-        device_type,
-        data.len()
-    );
-    crate::debugdump!(data);
-    Ok(())
-}
-
 // デバイス名を指定してデータ出力
 pub fn net_device_output_by_name(
     name: &[u8],
@@ -241,19 +248,82 @@ pub fn net_device_output_by_name(
     Err(-1)
 }
 
+// ネットワークプロトコルの登録
+pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) -> Result<(), i32> {
+    let protocol = Box::new(NetProtocol {
+        next: std::ptr::null_mut(),
+        protocol_type,
+        handler,
+    });
+
+    // 生ポインタを触るので unsafe
+    unsafe {
+        let mut proto = protocols;
+        // すでに登録されているプロトコルかどうかを確認
+        while !proto.is_null() {
+            if (*proto).protocol_type == protocol_type {
+                crate::log_error!(
+                    "net_protocol_register: already registered, type={:#06x}",
+                    protocol_type
+                );
+                return Err(-1);
+            }
+            proto = (*proto).next;
+        }
+    }
+
+    // プロトコルを登録
+    let raw = Box::into_raw(protocol);
+    unsafe {
+        (*raw).next = protocols;
+        protocols = raw;
+    }
+    crate::log_info!(
+        "net_protocol_register: success, type={:#06x}",
+        protocol_type
+    );
+    Ok(())
+}
+
+// ネットワークデバイスからのデータ入力
+pub fn net_input(protocol_type: u16, data: &[u8], dev: &NetDevice) -> Result<(), i32> {
+    crate::log_debug!(
+        "net_input: dev={}, type={:#06x}, len={}",
+        dev.name(),
+        protocol_type,
+        data.len()
+    );
+    crate::debugdump!(data);
+
+    unsafe {
+        let mut proto = protocols;
+        while !proto.is_null() {
+            if (*proto).protocol_type == protocol_type {
+                ((*proto).handler)(data, dev);
+                return Ok(());
+            }
+            proto = (*proto).next;
+        }
+    }
+    /* サポートされていないプロトコルの場合 */
+    Ok(())
+}
+
 // 初期化
 pub fn net_init() -> Result<(), i32> {
     crate::log_info!("net_init: initialize...");
-    match Platform::init() {
-        Ok(_) => {
-            crate::log_info!("net_init: success");
-            Ok(())
-        }
-        Err(e) => {
-            crate::log_error!("net_init: platform_init() failed: {}", e);
-            Err(e)
-        }
+    if let Err(e) = Platform::init() {
+        crate::log_error!("net_init: platform_init() failed: {}", e);
+        return Err(e);
     }
+
+    if let Err(e) = ip::ip_init() {
+        crate::log_error!("net_init: ip_init() failed: {}", e);
+        return Err(e);
+    }
+
+    crate::log_info!("net_init: success");
+    Ok(())
 }
 
 // 起動
