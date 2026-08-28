@@ -9,7 +9,7 @@ pub fn loopback_output(
     _dst: &[u8],
 ) -> Result<(), i32> {
     crate::log_debug!(
-        "loopback_output: dev={}, type={:#06x}, len={}",
+        "loopback_output: dev={}, device_type={:#06x}, len={}",
         dev.name(),
         device_type,
         data.len()

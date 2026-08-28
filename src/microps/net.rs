@@ -130,7 +130,7 @@ pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDe
     dev.name[..name.len()].copy_from_slice(name);
 
     crate::log_info!(
-        "net_device_register: success, dev={}, type={:#06x}",
+        "net_device_register: success, dev={}, device_type={:#06x}",
         dev.name(),
         dev.device_type
     );
@@ -173,7 +173,7 @@ fn net_device_output(
     dst: &[u8],
 ) -> Result<(), i32> {
     crate::log_debug!(
-        "net_device_output: dev={}, type={:#06x}, len={}",
+        "net_device_output: dev={}, device_type={:#06x}, len={}",
         dev.name(),
         device_type,
         data.len()
@@ -263,7 +263,7 @@ pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) ->
         while !proto.is_null() {
             if (*proto).protocol_type == protocol_type {
                 crate::log_error!(
-                    "net_protocol_register: already registered, type={:#06x}",
+                    "net_protocol_register: already registered, protocol_type={:#06x}",
                     protocol_type
                 );
                 return Err(-1);
@@ -279,7 +279,7 @@ pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) ->
         protocols = raw;
     }
     crate::log_info!(
-        "net_protocol_register: success, type={:#06x}",
+        "net_protocol_register: success, protocol_type={:#06x}",
         protocol_type
     );
     Ok(())
@@ -288,7 +288,7 @@ pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) ->
 // ネットワークデバイスからのデータ入力
 pub fn net_input(protocol_type: u16, data: &[u8], dev: &NetDevice) -> Result<(), i32> {
     crate::log_debug!(
-        "net_input: dev={}, type={:#06x}, len={}",
+        "net_input: dev={}, protocol_type={:#06x}, len={}",
         dev.name(),
         protocol_type,
         data.len()
