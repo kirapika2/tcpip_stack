@@ -20,16 +20,17 @@ pub const NET_PROTOCOL_TYPE_IP: u16 = 0x0800;
 pub const NET_PROTOCOL_TYPE_ARP: u16 = 0x0806;
 pub const NET_PROTOCOL_TYPE_IPV6: u16 = 0x86dd;
 
-macro_rules! up_flag {
-    ($x:expr) => {
-        $x.flags & NET_DEVICE_FLAG_UP != 0
-    };
-}
-#[allow(unused_macros)]
-macro_rules! state {
-    ($x:expr) => {
-        up_flag!($x) ? "UP" : "DOWN"
-    };
+impl NetDevice {
+    pub fn is_up(&self) -> bool {
+        self.flags & NET_DEVICE_FLAG_UP != 0
+    }
+    pub fn state(&self) -> &str {
+        if self.is_up() {
+            "UP"
+        } else {
+            "DOWN"
+        }
+    }
 }
 
 // ネットワークデバイス
@@ -148,7 +149,7 @@ pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDe
 // ネットワークデバイスの起動
 fn net_device_open(dev: &mut NetDevice /* 可変参照 */) {
     crate::log_info!("net_device_open: dev={}", dev.name());
-    if up_flag!(dev) {
+    if dev.is_up() {
         crate::log_info!("net_device_open: already opened, dev={}", dev.name());
         return;
     }
@@ -158,7 +159,7 @@ fn net_device_open(dev: &mut NetDevice /* 可変参照 */) {
 // ネットワークデバイスの停止
 fn net_device_close(dev: &mut NetDevice /* 可変参照 */) {
     crate::log_info!("net_device_close: dev={}", dev.name());
-    if !up_flag!(dev) {
+    if !dev.is_up() {
         crate::log_error!("net_device_close: already closed, dev={}", dev.name());
         return;
     }
@@ -180,7 +181,7 @@ fn net_device_output(
     );
     crate::debugdump!(data); // デバッグ時に 16 進ダンプ
 
-    if !up_flag!(dev) {
+    if !dev.is_up() {
         crate::log_error!("net_device_output: device is down, dev={}", dev.name());
         return Err(-1);
     }
