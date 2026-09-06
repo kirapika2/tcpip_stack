@@ -1,3 +1,6 @@
+//! ネットワーク全般
+//!
+//! ネットワークデバイスおよびプロトコルの管理
 use std::ffi::CStr;
 use std::sync::atomic::AtomicU32;
 
@@ -33,7 +36,7 @@ impl NetDevice {
     }
 }
 
-// ネットワークデバイス
+/// ネットワークデバイス
 #[allow(dead_code)]
 pub struct NetDevice {
     next: *mut NetDevice,
@@ -50,7 +53,7 @@ pub struct NetDevice {
     private_data: Option<Box<dyn std::any::Any>>,
 }
 
-// デバイスドライバの制御ルーチン
+/// デバイスドライバの制御ルーチン
 pub struct NetDeviceOps {
     pub open: Option<fn(dev: &mut NetDevice) -> Result<(), i32>>,
     pub close: Option<fn(dev: &mut NetDevice) -> Result<(), i32>>,
@@ -59,14 +62,14 @@ pub struct NetDeviceOps {
     >,
 }
 
-// ネットワークプロトコル
+/// ネットワークプロトコル
 struct NetProtocol {
     next: *mut NetProtocol,
     pub protocol_type: u16,
     pub handler: NetProtocolHandler,
 }
 
-// プロトコルの入力処理
+/// プロトコルの入力処理
 pub type NetProtocolHandler = fn(data: &[u8], dev: &NetDevice);
 
 // Rust ベースでデフォルト値を設定
@@ -106,13 +109,13 @@ static mut devices: *mut NetDevice = std::ptr::null_mut(); // 最初のデバイ
 #[allow(non_upper_case_globals)]
 static mut protocols: *mut NetProtocol = std::ptr::null_mut(); // 最初のプロトコルの生ポインタ
 
-// ネットワークデバイスの割り当て
+/// ネットワークデバイスの割り当て
 pub fn net_device_alloc() -> Box<NetDevice> {
     Box::default()
 }
 
-// ネットワークデバイスの登録
-// 登録されたデバイスはスタック内で管理され、アプリケーションからは名前でアクセスされる
+/// ネットワークデバイスの登録
+/// 登録されたデバイスはスタック内で管理され、アプリケーションからは名前でアクセスされる
 pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDevice, i32> {
     #[allow(non_upper_case_globals)]
     static device_index: AtomicU32 = AtomicU32::new(0);
@@ -146,7 +149,7 @@ pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDe
     }
 }
 
-// ネットワークデバイスの起動
+/// ネットワークデバイスの起動
 fn net_device_open(dev: &mut NetDevice /* 可変参照 */) {
     crate::log_info!("net_device_open: dev={}", dev.name());
     if dev.is_up() {
@@ -156,7 +159,7 @@ fn net_device_open(dev: &mut NetDevice /* 可変参照 */) {
     dev.flags |= NET_DEVICE_FLAG_UP; // フラグを立てる
 }
 
-// ネットワークデバイスの停止
+/// ネットワークデバイスの停止
 fn net_device_close(dev: &mut NetDevice /* 可変参照 */) {
     crate::log_info!("net_device_close: dev={}", dev.name());
     if !dev.is_up() {
@@ -166,7 +169,7 @@ fn net_device_close(dev: &mut NetDevice /* 可変参照 */) {
     dev.flags &= !NET_DEVICE_FLAG_UP; // フラグを下げる
 }
 
-// ネットワークデバイスへデータ出力
+/// ネットワークデバイスへデータ出力
 fn net_device_output(
     dev: &mut NetDevice,
     device_type: u16,
@@ -218,7 +221,7 @@ fn net_device_output(
     }
 }
 
-// デバイス名を指定してデータ出力
+/// デバイス名を指定してデータ出力
 pub fn net_device_output_by_name(
     name: &[u8],
     device_type: u16,
@@ -249,7 +252,7 @@ pub fn net_device_output_by_name(
     Err(-1)
 }
 
-// ネットワークプロトコルの登録
+/// ネットワークプロトコルの登録
 pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) -> Result<(), i32> {
     let protocol = Box::new(NetProtocol {
         next: std::ptr::null_mut(),
@@ -286,7 +289,7 @@ pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) ->
     Ok(())
 }
 
-// ネットワークデバイスからのデータ入力
+/// ネットワークデバイスからのデータ入力
 pub fn net_input(protocol_type: u16, data: &[u8], dev: &NetDevice) -> Result<(), i32> {
     crate::log_debug!(
         "net_input: dev={}, protocol_type={:#06x}, len={}",
@@ -310,7 +313,7 @@ pub fn net_input(protocol_type: u16, data: &[u8], dev: &NetDevice) -> Result<(),
     Ok(())
 }
 
-// 初期化
+/// 初期化
 pub fn net_init() -> Result<(), i32> {
     crate::log_info!("net_init: initialize...");
     if let Err(e) = Platform::init() {
@@ -327,7 +330,7 @@ pub fn net_init() -> Result<(), i32> {
     Ok(())
 }
 
-// 起動
+/// 起動
 pub fn net_run() -> Result<(), i32> {
     crate::log_info!("net_run: startup...");
     match Platform::run() {
@@ -351,7 +354,7 @@ pub fn net_run() -> Result<(), i32> {
     }
 }
 
-// 終了
+/// 終了
 pub fn net_shutdown() -> Result<(), i32> {
     crate::log_info!("net_shutdown: shutting down...");
     match Platform::shutdown() {

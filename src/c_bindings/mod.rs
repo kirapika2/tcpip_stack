@@ -1,7 +1,7 @@
-// Cコードとのバインディング層
-//
-// このモジュールは`build.rs`でコンパイルされたCコードとの
-// FFI（Foreign Function Interface）を提供します。
+//! Cコードとのバインディング層
+//!
+//! このモジュールは`build.rs`でコンパイルされたCコードとの
+//! FFI（Foreign Function Interface）を提供します。
 
 pub mod ffi;
 pub mod platform;

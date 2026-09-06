@@ -1,3 +1,4 @@
+//! ループバックデバイスの実装
 use crate::microps::net::{self, net_device_alloc, net_device_register};
 
 pub const LOOPBACK_MTU: u16 = 65535;

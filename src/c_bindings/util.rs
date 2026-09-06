@@ -1,4 +1,4 @@
-// Rust側で利用するログ機能
+//! Rust側で利用するログ機能
 
 use std::io::{self, Write};
 use std::sync::Mutex;

@@ -1,6 +1,6 @@
-// Cコードとのバインディング定義
-// CコードをRustから呼び出すためのFFI(Foreign Function Interface)定義
-// Cコードは`build.rs`でコンパイルされ、リンクされる
+//! Cコードとのバインディング定義
+//! CコードをRustから呼び出すためのFFI(Foreign Function Interface)定義
+//! Cコードは`build.rs`でコンパイルされ、リンクされる
 
 use std::os::raw::{c_int, c_void};
 

@@ -11,7 +11,7 @@ const TEST_DATA: [u8; 48] = [
     0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x21, 0x40, 0x23, 0x24, 0x25, 0x5e, 0x26, 0x2a, 0x28, 0x29,
 ];
 
-// シグナルハンドラ
+/// シグナルハンドラ
 static TERMINATE: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_signal(_: libc::c_int) {
@@ -33,7 +33,7 @@ fn install_signal_handler() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-// プロトコルスタックの事前準備
+/// プロトコルスタックの事前準備
 fn setup() -> Result<(), String> {
     install_signal_handler().map_err(|error| format!("sigaction() {error}"))?;
     log_info!("setup protocol stack...");
@@ -43,14 +43,14 @@ fn setup() -> Result<(), String> {
     Ok(())
 }
 
-// プロトコルスタックの事後処理
+/// プロトコルスタックの事後処理
 fn cleanup() -> Result<(), String> {
     log_info!("cleanup protocol stack...");
     net::net_shutdown().map_err(|error| format!("net_shutdown() failed: {error}"))?;
     Ok(())
 }
 
-// アプリケーション処理
+/// アプリケーション処理
 fn app_main() -> Result<(), String> {
     log_debug!("press Ctrl+C to terminate");
     while !TERMINATE.load(Ordering::Relaxed) {
