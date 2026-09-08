@@ -8,8 +8,11 @@
 //! - トランスポート層（Transport Layer）- TCP、UDP
 //! - アプリケーション層のサポート
 
+pub mod error; // エラー処理
 pub mod ip; // IPレイヤー
 pub mod net; // ネットワーク全般
+
+pub use error::NetError;
 
 // 将来的に追加予定:
 // pub mod types;     // 共通の型定義

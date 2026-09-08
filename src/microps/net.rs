@@ -4,7 +4,7 @@
 use std::ffi::CStr;
 use std::sync::atomic::AtomicU32;
 
-use crate::microps::ip;
+use crate::microps::{ip, NetError};
 use crate::Platform;
 
 pub const NET_DEVICE_TYPE_DUMMY: u16 = 0x0000;
@@ -55,10 +55,10 @@ pub struct NetDevice {
 
 /// デバイスドライバの制御ルーチン
 pub struct NetDeviceOps {
-    pub open: Option<fn(dev: &mut NetDevice) -> Result<(), i32>>,
-    pub close: Option<fn(dev: &mut NetDevice) -> Result<(), i32>>,
+    pub open: Option<fn(dev: &mut NetDevice) -> Result<(), NetError>>,
+    pub close: Option<fn(dev: &mut NetDevice) -> Result<(), NetError>>,
     pub output: Option<
-        fn(dev: &mut NetDevice, device_type: u16, data: &[u8], dst: &[u8]) -> Result<(), i32>,
+        fn(dev: &mut NetDevice, device_type: u16, data: &[u8], dst: &[u8]) -> Result<(), NetError>,
     >,
 }
 
@@ -116,7 +116,7 @@ pub fn net_device_alloc() -> Box<NetDevice> {
 
 /// ネットワークデバイスの登録
 /// 登録されたデバイスはスタック内で管理され、アプリケーションからは名前でアクセスされる
-pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDevice, i32> {
+pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDevice, NetError> {
     #[allow(non_upper_case_globals)]
     static device_index: AtomicU32 = AtomicU32::new(0);
 
@@ -129,7 +129,7 @@ pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDe
     if name.len() >= dev.name.len() {
         crate::log_error!("net_device_register: device name is too long");
         // dev はここで drop されて、ヒープ領域が解放
-        return Err(-1);
+        return Err(NetError::DeviceNameTooLong);
     }
     dev.name[..name.len()].copy_from_slice(name);
 
@@ -175,7 +175,7 @@ fn net_device_output(
     device_type: u16,
     data: &[u8],
     dst: &[u8],
-) -> Result<(), i32> {
+) -> Result<(), NetError> {
     crate::log_debug!(
         "net_device_output: dev={}, device_type={:#06x}, len={}",
         dev.name(),
@@ -186,7 +186,7 @@ fn net_device_output(
 
     if !dev.is_up() {
         crate::log_error!("net_device_output: device is down, dev={}", dev.name());
-        return Err(-1);
+        return Err(NetError::DeviceDown);
     }
 
     if dev.mtu < data.len() as u16 {
@@ -196,7 +196,7 @@ fn net_device_output(
             dev.mtu,
             data.len()
         );
-        return Err(-1);
+        return Err(NetError::PacketTooLong);
     }
 
     // 制御ルーチンを使ってデータ出力
@@ -208,7 +208,7 @@ fn net_device_output(
                     "net_device_output: ops.output is not supported, dev={}",
                     dev.name()
                 );
-                Err(-1)
+                Err(NetError::OutputNotSupported)
             }
         },
         None => {
@@ -216,7 +216,7 @@ fn net_device_output(
                 "net_device_output: device operations are not set, dev={}",
                 dev.name()
             );
-            Err(-1)
+            Err(NetError::OperationsNotSet)
         }
     }
 }
@@ -227,7 +227,7 @@ pub fn net_device_output_by_name(
     device_type: u16,
     data: &[u8],
     dst: &[u8],
-) -> Result<(), i32> {
+) -> Result<(), NetError> {
     // デバイスリストを走査して、指定された名前のデバイスを探す
     unsafe {
         let mut dev = devices;
@@ -249,11 +249,14 @@ pub fn net_device_output_by_name(
     }
 
     crate::log_error!("net_device_output_by_name: device not found: {:?}", name);
-    Err(-1)
+    Err(NetError::DeviceNotFound)
 }
 
 /// ネットワークプロトコルの登録
-pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) -> Result<(), i32> {
+pub fn net_protocol_register(
+    protocol_type: u16,
+    handler: NetProtocolHandler,
+) -> Result<(), NetError> {
     let protocol = Box::new(NetProtocol {
         next: std::ptr::null_mut(),
         protocol_type,
@@ -270,7 +273,7 @@ pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) ->
                     "net_protocol_register: already registered, protocol_type={:#06x}",
                     protocol_type
                 );
-                return Err(-1);
+                return Err(NetError::ProtocolAlreadyRegistered);
             }
             proto = (*proto).next;
         }
@@ -290,7 +293,7 @@ pub fn net_protocol_register(protocol_type: u16, handler: NetProtocolHandler) ->
 }
 
 /// ネットワークデバイスからのデータ入力
-pub fn net_input(protocol_type: u16, data: &[u8], dev: &NetDevice) -> Result<(), i32> {
+pub fn net_input(protocol_type: u16, data: &[u8], dev: &NetDevice) -> Result<(), NetError> {
     crate::log_debug!(
         "net_input: dev={}, protocol_type={:#06x}, len={}",
         dev.name(),
@@ -314,24 +317,22 @@ pub fn net_input(protocol_type: u16, data: &[u8], dev: &NetDevice) -> Result<(),
 }
 
 /// 初期化
-pub fn net_init() -> Result<(), i32> {
+pub fn net_init() -> Result<(), NetError> {
     crate::log_info!("net_init: initialize...");
+    // C コードのエラーを Rust 側に
     if let Err(e) = Platform::init() {
         crate::log_error!("net_init: platform_init() failed: {}", e);
-        return Err(e);
+        return Err(NetError::PlatformInitFailed);
     }
 
-    if let Err(e) = ip::ip_init() {
-        crate::log_error!("net_init: ip_init() failed: {}", e);
-        return Err(e);
-    }
+    ip::ip_init().inspect_err(|e| crate::log_trace!("net_init: ip_init() failed: {e}"))?;
 
     crate::log_info!("net_init: success");
     Ok(())
 }
 
 /// 起動
-pub fn net_run() -> Result<(), i32> {
+pub fn net_run() -> Result<(), NetError> {
     crate::log_info!("net_run: startup...");
     match Platform::run() {
         Ok(_) => {
@@ -349,13 +350,13 @@ pub fn net_run() -> Result<(), i32> {
         }
         Err(e) => {
             crate::log_error!("net_run: platform_run() failed: {}", e);
-            Err(e)
+            Err(NetError::PlatformRunFailed)
         }
     }
 }
 
 /// 終了
-pub fn net_shutdown() -> Result<(), i32> {
+pub fn net_shutdown() -> Result<(), NetError> {
     crate::log_info!("net_shutdown: shutting down...");
     match Platform::shutdown() {
         Ok(_) => {
@@ -373,7 +374,7 @@ pub fn net_shutdown() -> Result<(), i32> {
         }
         Err(e) => {
             crate::log_error!("net_shutdown: platform_shutdown() failed: {}", e);
-            Err(e)
+            Err(NetError::PlatformShutdownFailed)
         }
     }
 }

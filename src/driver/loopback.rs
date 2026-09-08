@@ -1,5 +1,8 @@
 //! ループバックデバイスの実装
-use crate::microps::net::{self, net_device_alloc, net_device_register};
+use crate::microps::{
+    self,
+    net::{self, net_device_alloc, net_device_register},
+};
 
 pub const LOOPBACK_MTU: u16 = 65535;
 
@@ -8,7 +11,7 @@ pub fn loopback_output(
     device_type: u16,
     data: &[u8],
     _dst: &[u8],
-) -> Result<(), i32> {
+) -> Result<(), microps::NetError> {
     crate::log_debug!(
         "loopback_output: dev={}, device_type={:#06x}, len={}",
         dev.name(),
@@ -27,7 +30,7 @@ static loopback_ops: net::NetDeviceOps = net::NetDeviceOps {
     output: Some(loopback_output),
 };
 
-pub fn loopback_init() -> Result<(), i32> {
+pub fn loopback_init() -> Result<(), microps::NetError> {
     let mut dev = net_device_alloc();
     // Box でヒープ上のメモリ領域に対するアドレスの
     // 所有権を持たせており、null にはならないはず
@@ -45,13 +48,8 @@ pub fn loopback_init() -> Result<(), i32> {
 
     // ループバックデバイスを登録
     // 所有権はスタック側に移り、代わりに 'static な参照が返る
-    let dev = match net_device_register(dev) {
-        Ok(dev) => dev,
-        Err(e) => {
-            crate::log_error!("loopback_init: net_device_register() failed");
-            return Err(e);
-        }
-    };
+    let dev = net_device_register(dev)
+        .inspect_err(|e| crate::log_trace!("loopback_init: net_device_register() failed: {e}"))?;
 
     crate::log_info!("loopback_init: success, dev={}", dev.name());
     Ok(())
