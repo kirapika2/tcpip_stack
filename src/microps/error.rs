@@ -6,6 +6,8 @@ pub enum NetError {
     PlatformInitFailed,
     PlatformRunFailed,
     PlatformShutdownFailed,
+    // シグナルハンドラ (libc 呼び出し)
+    SignalHandlerFailed,
     // デバイス管理
     DeviceNameTooLong,
     DeviceNotFound,
@@ -27,6 +29,7 @@ impl std::fmt::Display for NetError {
             Self::PlatformInitFailed => write!(f, "platform initialization failed"),
             Self::PlatformRunFailed => write!(f, "platform run failed"),
             Self::PlatformShutdownFailed => write!(f, "platform shutdown failed"),
+            Self::SignalHandlerFailed => write!(f, "signal handler installation failed"),
             Self::DeviceNameTooLong => write!(f, "device name is too long"),
             Self::DeviceNotFound => write!(f, "device not found"),
             Self::OperationsNotSet => write!(f, "device operations are not set"),
