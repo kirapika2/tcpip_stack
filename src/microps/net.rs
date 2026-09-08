@@ -19,20 +19,26 @@ pub const NET_DEVICE_FLAG_NEED_ARP: u16 = 0x0100;
 
 pub const NET_DEVICE_ADDR_LEN: usize = 16;
 
-pub const NET_PROTOCOL_TYPE_IP: u16 = 0x0800;
-pub const NET_PROTOCOL_TYPE_ARP: u16 = 0x0806;
-pub const NET_PROTOCOL_TYPE_IPV6: u16 = 0x86dd;
+/// プロトコル種別 (EtherType)
+/// 16bit ネットワークバイトオーダー (ビッグエンディアン)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct NetProtocolType(u16);
 
-impl NetDevice {
-    pub fn is_up(&self) -> bool {
-        self.flags & NET_DEVICE_FLAG_UP != 0
+impl NetProtocolType {
+    pub const IP: Self = Self(0x0800);
+    pub const ARP: Self = Self(0x0806);
+    pub const IPV6: Self = Self(0x86dd);
+
+    /// 読み取った値を `NetProtocolType` として解釈する
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
     }
-    pub fn state(&self) -> &str {
-        if self.is_up() {
-            "UP"
-        } else {
-            "DOWN"
-        }
+}
+
+impl std::fmt::LowerHex for NetProtocolType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::LowerHex::fmt(&self.0, f) // フォーマットは u16 に委譲
     }
 }
 
@@ -53,19 +59,37 @@ pub struct NetDevice {
     private_data: Option<Box<dyn std::any::Any>>,
 }
 
+impl NetDevice {
+    pub fn is_up(&self) -> bool {
+        self.flags & NET_DEVICE_FLAG_UP != 0
+    }
+    pub fn state(&self) -> &str {
+        if self.is_up() {
+            "UP"
+        } else {
+            "DOWN"
+        }
+    }
+}
+
 /// デバイスドライバの制御ルーチン
 pub struct NetDeviceOps {
     pub open: Option<fn(dev: &mut NetDevice) -> Result<(), NetError>>,
     pub close: Option<fn(dev: &mut NetDevice) -> Result<(), NetError>>,
     pub output: Option<
-        fn(dev: &mut NetDevice, device_type: u16, data: &[u8], dst: &[u8]) -> Result<(), NetError>,
+        fn(
+            dev: &mut NetDevice,
+            protocol_type: NetProtocolType,
+            data: &[u8],
+            dst: &[u8],
+        ) -> Result<(), NetError>,
     >,
 }
 
 /// ネットワークプロトコル
 struct NetProtocol {
     next: *mut NetProtocol,
-    pub protocol_type: u16,
+    pub protocol_type: NetProtocolType,
     pub handler: NetProtocolHandler,
 }
 
@@ -172,14 +196,14 @@ fn net_device_close(dev: &mut NetDevice /* 可変参照 */) {
 /// ネットワークデバイスへデータ出力
 fn net_device_output(
     dev: &mut NetDevice,
-    device_type: u16,
+    protocol_type: NetProtocolType,
     data: &[u8],
     dst: &[u8],
 ) -> Result<(), NetError> {
     crate::log_debug!(
-        "net_device_output: dev={}, device_type={:#06x}, len={}",
+        "net_device_output: dev={}, protocol_type={:#06x}, len={}",
         dev.name(),
-        device_type,
+        protocol_type,
         data.len()
     );
     crate::debugdump!(data); // デバッグ時に 16 進ダンプ
@@ -202,7 +226,7 @@ fn net_device_output(
     // 制御ルーチンを使ってデータ出力
     match dev.ops {
         Some(ops) => match ops.output {
-            Some(output) => output(dev, device_type, data, dst),
+            Some(output) => output(dev, protocol_type, data, dst),
             None => {
                 crate::log_error!(
                     "net_device_output: ops.output is not supported, dev={}",
@@ -224,7 +248,7 @@ fn net_device_output(
 /// デバイス名を指定してデータ出力
 pub fn net_device_output_by_name(
     name: &[u8],
-    device_type: u16,
+    protocol_type: NetProtocolType,
     data: &[u8],
     dst: &[u8],
 ) -> Result<(), NetError> {
@@ -242,7 +266,7 @@ pub fn net_device_output_by_name(
                 }
             };
             if device_name == name {
-                return net_device_output(&mut *dev, device_type, data, dst);
+                return net_device_output(&mut *dev, protocol_type, data, dst);
             }
             dev = (*dev).next;
         }
@@ -254,7 +278,7 @@ pub fn net_device_output_by_name(
 
 /// ネットワークプロトコルの登録
 pub fn net_protocol_register(
-    protocol_type: u16,
+    protocol_type: NetProtocolType,
     handler: NetProtocolHandler,
 ) -> Result<(), NetError> {
     let protocol = Box::new(NetProtocol {
@@ -293,7 +317,11 @@ pub fn net_protocol_register(
 }
 
 /// ネットワークデバイスからのデータ入力
-pub fn net_input(protocol_type: u16, data: &[u8], dev: &NetDevice) -> Result<(), NetError> {
+pub fn net_input(
+    protocol_type: NetProtocolType,
+    data: &[u8],
+    dev: &NetDevice,
+) -> Result<(), NetError> {
     crate::log_debug!(
         "net_input: dev={}, protocol_type={:#06x}, len={}",
         dev.name(),

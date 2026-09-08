@@ -9,6 +9,6 @@ pub fn ip_input(data: &[u8], dev: &net::NetDevice) {
 
 /// IP プロトコルの初期化
 pub fn ip_init() -> Result<(), NetError> {
-    net::net_protocol_register(net::NET_PROTOCOL_TYPE_IP, ip_input)
+    net::net_protocol_register(net::NetProtocolType::IP, ip_input)
         .inspect_err(|e| crate::log_trace!("ip_init: net_protocol_register() failed: {e}"))
 }

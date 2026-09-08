@@ -8,19 +8,19 @@ pub const LOOPBACK_MTU: u16 = 65535;
 
 pub fn loopback_output(
     dev: &mut net::NetDevice,
-    device_type: u16,
+    protocol_type: net::NetProtocolType,
     data: &[u8],
     _dst: &[u8],
 ) -> Result<(), microps::NetError> {
     crate::log_debug!(
-        "loopback_output: dev={}, device_type={:#06x}, len={}",
+        "loopback_output: dev={}, protocol_type={:#06x}, len={}",
         dev.name(),
-        device_type,
+        protocol_type,
         data.len()
     );
     crate::debugdump!(data);
 
-    net::net_input(device_type, data, dev)
+    net::net_input(protocol_type, data, dev)
 }
 
 #[allow(non_upper_case_globals)]
