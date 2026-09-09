@@ -7,7 +7,7 @@ use crate::microps::{
 pub const LOOPBACK_MTU: u16 = 65535;
 
 pub fn loopback_output(
-    dev: &mut net::NetDevice,
+    dev: &net::NetDevice,
     protocol_type: net::NetProtocolType,
     data: &[u8],
     _dst: &[u8],
@@ -41,7 +41,7 @@ pub fn loopback_init() -> Result<(), microps::NetError> {
 
     dev.device_type = net::NET_DEVICE_TYPE_LOOPBACK;
     dev.mtu = LOOPBACK_MTU;
-    dev.flags = net::NET_DEVICE_FLAG_LOOPBACK;
+    dev.set_flags(net::NET_DEVICE_FLAG_LOOPBACK);
     dev.hlen = 0;
     dev.alen = 0;
     dev.ops = Some(&loopback_ops);

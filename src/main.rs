@@ -58,7 +58,7 @@ fn cleanup() -> Result<(), NetError> {
 fn app_main() -> Result<(), NetError> {
     log_debug!("press Ctrl+C to terminate");
     while !TERMINATE.load(Ordering::Relaxed) {
-        net::net_device_output_by_name(b"net1", net::NetProtocolType::IP, &TEST_DATA, &[])
+        net::net_device_output_by_name(b"net0", net::NetProtocolType::IP, &TEST_DATA, &[])
             .inspect_err(|e| log_trace!("app_main: net_device_output_by_name() failed: {e}"))?;
         std::thread::sleep(std::time::Duration::from_secs(1));
     }

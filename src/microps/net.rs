@@ -2,7 +2,8 @@
 //!
 //! ネットワークデバイスおよびプロトコルの管理
 use std::ffi::CStr;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::sync::RwLock;
 
 use crate::microps::{ip, NetError};
 use crate::Platform;
@@ -43,25 +44,27 @@ impl std::fmt::LowerHex for NetProtocolType {
 }
 
 /// ネットワークデバイス
+///
+/// 登録後はスタックが所有し、複数の箇所から共有参照 (`&'static`) で参照可能 (RwLock で保護される)
 #[allow(dead_code)]
 pub struct NetDevice {
-    next: *mut NetDevice,
     index: u32,
     name: [u8; 16],
     pub device_type: u16,
     pub mtu: u16,
-    pub flags: u16,
+    flags: AtomicU16, // 登録後に変化するため、アトミックにして共有参照のまま更新可能に
     pub hlen: u16,
     pub alen: u16,
     addr: [u8; NET_DEVICE_ADDR_LEN],
     broadcast: [u8; NET_DEVICE_ADDR_LEN],
     pub ops: Option<&'static NetDeviceOps>,
-    private_data: Option<Box<dyn std::any::Any>>,
+    // 複数スレッドから参照されるため Send + Sync が必要
+    private_data: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl NetDevice {
     pub fn is_up(&self) -> bool {
-        self.flags & NET_DEVICE_FLAG_UP != 0
+        self.flags.load(Ordering::Relaxed) & NET_DEVICE_FLAG_UP != 0
     }
     pub fn state(&self) -> &str {
         if self.is_up() {
@@ -70,15 +73,20 @@ impl NetDevice {
             "DOWN"
         }
     }
+    /// 登録前の初期設定用 (フラグ全体の設定)
+    /// 登録後のフラグの変更は `fetch_or` / `fetch_and` で行う
+    pub fn set_flags(&mut self, flags: u16) {
+        *self.flags.get_mut() = flags;
+    }
 }
 
 /// デバイスドライバの制御ルーチン
 pub struct NetDeviceOps {
-    pub open: Option<fn(dev: &mut NetDevice) -> Result<(), NetError>>,
-    pub close: Option<fn(dev: &mut NetDevice) -> Result<(), NetError>>,
+    pub open: Option<fn(dev: &NetDevice) -> Result<(), NetError>>,
+    pub close: Option<fn(dev: &NetDevice) -> Result<(), NetError>>,
     pub output: Option<
         fn(
-            dev: &mut NetDevice,
+            dev: &NetDevice,
             protocol_type: NetProtocolType,
             data: &[u8],
             dst: &[u8],
@@ -102,12 +110,11 @@ pub type NetProtocolHandler = fn(data: &[u8], dev: &NetDevice);
 impl Default for NetDevice {
     fn default() -> Self {
         Self {
-            next: std::ptr::null_mut(),
             index: 0,
             name: [0; 16],
             device_type: 0,
             mtu: 0,
-            flags: 0,
+            flags: AtomicU16::new(0),
             hlen: 0,
             alen: 0,
             addr: [0; NET_DEVICE_ADDR_LEN],
@@ -128,8 +135,11 @@ impl NetDevice {
     }
 }
 
+// 登録済みのデバイスの一覧
+// デバイスの実体はヒープ上に固定 (leak) されており、その共有参照を持つ
 #[allow(non_upper_case_globals)]
-static mut devices: *mut NetDevice = std::ptr::null_mut(); // 最初のデバイスの生ポインタ
+static devices: RwLock<Vec<&'static NetDevice>> = RwLock::new(Vec::new());
+
 #[allow(non_upper_case_globals)]
 static mut protocols: *mut NetProtocol = std::ptr::null_mut(); // 最初のプロトコルの生ポインタ
 
@@ -140,12 +150,12 @@ pub fn net_device_alloc() -> Box<NetDevice> {
 
 /// ネットワークデバイスの登録
 /// 登録されたデバイスはスタック内で管理され、アプリケーションからは名前でアクセスされる
-pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDevice, NetError> {
+pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static NetDevice, NetError> {
     #[allow(non_upper_case_globals)]
     static device_index: AtomicU32 = AtomicU32::new(0);
 
-    device_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed); // 値の原子性を確保してインクリメント
-    dev.index = device_index.load(std::sync::atomic::Ordering::Relaxed);
+    // 値の原子性を確保してインクリメント
+    dev.index = device_index.fetch_add(1, Ordering::Relaxed); // 返り値自体は加算前
 
     // name フィールド長にあわせたデバイス名を設定
     let name = format!("net{}", dev.index);
@@ -163,39 +173,37 @@ pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static mut NetDe
         dev.device_type
     );
 
-    // Box を生ポインタに変換して所有権を手放し、リスト (static) の先頭に繋ぐ
+    // Box を意図的にリークさせて 'static な共有参照にする
     // 以降このデバイスはスタックが管理し、プロセス終了まで生存する
-    let raw = Box::into_raw(dev);
-    unsafe {
-        (*raw).next = devices;
-        devices = raw;
-        Ok(&mut *raw) // 生ポインタを参照に変換して返す
-    }
+    let dev: &'static NetDevice = Box::leak(dev);
+    // ロックを保持したまま panic したときのみ失敗する
+    devices.write().unwrap().push(dev);
+    Ok(dev)
 }
 
 /// ネットワークデバイスの起動
-fn net_device_open(dev: &mut NetDevice /* 可変参照 */) {
+fn net_device_open(dev: &NetDevice) {
     crate::log_info!("net_device_open: dev={}", dev.name());
     if dev.is_up() {
         crate::log_info!("net_device_open: already opened, dev={}", dev.name());
         return;
     }
-    dev.flags |= NET_DEVICE_FLAG_UP; // フラグを立てる
+    dev.flags.fetch_or(NET_DEVICE_FLAG_UP, Ordering::Relaxed); // フラグを立てる
 }
 
 /// ネットワークデバイスの停止
-fn net_device_close(dev: &mut NetDevice /* 可変参照 */) {
+fn net_device_close(dev: &NetDevice) {
     crate::log_info!("net_device_close: dev={}", dev.name());
     if !dev.is_up() {
         crate::log_error!("net_device_close: already closed, dev={}", dev.name());
         return;
     }
-    dev.flags &= !NET_DEVICE_FLAG_UP; // フラグを下げる
+    dev.flags.fetch_and(!NET_DEVICE_FLAG_UP, Ordering::Relaxed); // フラグを下げる
 }
 
 /// ネットワークデバイスへデータ出力
 fn net_device_output(
-    dev: &mut NetDevice,
+    dev: &NetDevice,
     protocol_type: NetProtocolType,
     data: &[u8],
     dst: &[u8],
@@ -253,27 +261,21 @@ pub fn net_device_output_by_name(
     dst: &[u8],
 ) -> Result<(), NetError> {
     // デバイスリストを走査して、指定された名前のデバイスを探す
-    unsafe {
-        let mut dev = devices;
-        while !dev.is_null() {
-            let device_name = match CStr::from_bytes_until_nul(&(*dev).name) {
-                Ok(device_name) => device_name.to_bytes(),
-                Err(_) => {
-                    // 基本、デバイス名に null が含まれていなかったとき
-                    // これは 16 バイト以上の名前でのみ発生
-                    dev = (*dev).next;
-                    continue;
-                }
-            };
-            if device_name == name {
-                return net_device_output(&mut *dev, protocol_type, data, dst);
-            }
-            dev = (*dev).next;
+    let dev = {
+        // list のロックはこのスコープ内でのみ保持し、参照を返す
+        let list = devices.read().unwrap();
+        list.iter()
+            .copied()
+            .find(|dev| dev.name().as_bytes() == name)
+    };
+
+    match dev {
+        Some(dev) => net_device_output(dev, protocol_type, data, dst),
+        None => {
+            crate::log_error!("net_device_output_by_name: device not found: {:?}", name);
+            Err(NetError::DeviceNotFound)
         }
     }
-
-    crate::log_error!("net_device_output_by_name: device not found: {:?}", name);
-    Err(NetError::DeviceNotFound)
 }
 
 /// ネットワークプロトコルの登録
@@ -365,13 +367,9 @@ pub fn net_run() -> Result<(), NetError> {
     match Platform::run() {
         Ok(_) => {
             // 順にデバイスを起動
-            unsafe {
-                let mut dev = devices;
-                while !dev.is_null() {
-                    let next = (*dev).next;
-                    net_device_open(&mut *dev);
-                    dev = next;
-                }
+            let list = devices.read().unwrap().clone();
+            for dev in list {
+                net_device_open(dev);
             }
             crate::log_info!("net_run: success");
             Ok(())
@@ -389,13 +387,9 @@ pub fn net_shutdown() -> Result<(), NetError> {
     match Platform::shutdown() {
         Ok(_) => {
             // 順にデバイスを停止
-            unsafe {
-                let mut dev = devices;
-                while !dev.is_null() {
-                    let next = (*dev).next;
-                    net_device_close(&mut *dev);
-                    dev = next;
-                }
+            let list = devices.read().unwrap().clone();
+            for dev in list {
+                net_device_close(dev);
             }
             crate::log_info!("net_shutdown: success");
             Ok(())
