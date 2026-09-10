@@ -3,6 +3,7 @@
 //! ネットワークデバイスおよびプロトコルの管理
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::sync::RwLock;
 
 use crate::microps::{ip, NetError};
@@ -138,19 +139,19 @@ impl NetDevice {
 // 登録済みのデバイスの一覧
 // デバイスの実体はヒープ上に固定 (leak) されており、その共有参照を持つ
 #[allow(non_upper_case_globals)]
-static devices: RwLock<Vec<&'static NetDevice>> = RwLock::new(Vec::new());
+static devices: RwLock<Vec<Arc<NetDevice>>> = RwLock::new(Vec::new());
 
 #[allow(non_upper_case_globals)]
 static mut protocols: *mut NetProtocol = std::ptr::null_mut(); // 最初のプロトコルの生ポインタ
 
 /// ネットワークデバイスの割り当て
-pub fn net_device_alloc() -> Box<NetDevice> {
-    Box::default()
+pub fn net_device_alloc() -> NetDevice {
+    NetDevice::default()
 }
 
 /// ネットワークデバイスの登録
 /// 登録されたデバイスはスタック内で管理され、アプリケーションからは名前でアクセスされる
-pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static NetDevice, NetError> {
+pub fn net_device_register(mut dev: NetDevice) -> Result<Arc<NetDevice>, NetError> {
     #[allow(non_upper_case_globals)]
     static device_index: AtomicU32 = AtomicU32::new(0);
 
@@ -173,11 +174,10 @@ pub fn net_device_register(mut dev: Box<NetDevice>) -> Result<&'static NetDevice
         dev.device_type
     );
 
-    // Box を意図的にリークさせて 'static な共有参照にする
-    // 以降このデバイスはスタックが管理し、プロセス終了まで生存する
-    let dev: &'static NetDevice = Box::leak(dev);
-    // ロックを保持したまま panic したときのみ失敗する
-    devices.write().unwrap().push(dev);
+    // Arc (参照カウント付きスマートポインタ) に包んで共有参照にする
+    let dev = Arc::new(dev);
+    // dev のハンドルを増やし、devices に追加
+    devices.write().unwrap().push(Arc::clone(&dev));
     Ok(dev)
 }
 
@@ -265,12 +265,12 @@ pub fn net_device_output_by_name(
         // list のロックはこのスコープ内でのみ保持し、参照を返す
         let list = devices.read().unwrap();
         list.iter()
-            .copied()
+            .cloned()
             .find(|dev| dev.name().as_bytes() == name)
     };
 
     match dev {
-        Some(dev) => net_device_output(dev, protocol_type, data, dst),
+        Some(dev) => net_device_output(&dev, protocol_type, data, dst),
         None => {
             crate::log_error!("net_device_output_by_name: device not found: {:?}", name);
             Err(NetError::DeviceNotFound)
@@ -369,7 +369,7 @@ pub fn net_run() -> Result<(), NetError> {
             // 順にデバイスを起動
             let list = devices.read().unwrap().clone();
             for dev in list {
-                net_device_open(dev);
+                net_device_open(&dev);
             }
             crate::log_info!("net_run: success");
             Ok(())
@@ -389,7 +389,7 @@ pub fn net_shutdown() -> Result<(), NetError> {
             // 順にデバイスを停止
             let list = devices.read().unwrap().clone();
             for dev in list {
-                net_device_close(dev);
+                net_device_close(&dev);
             }
             crate::log_info!("net_shutdown: success");
             Ok(())
