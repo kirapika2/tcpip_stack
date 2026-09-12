@@ -1,22 +1,26 @@
-use crate::microps::net::{self, net_device_alloc, net_device_register};
+//! ループバックデバイスの実装
+use crate::microps::{
+    self,
+    net::{self, net_device_alloc, net_device_register},
+};
 
 pub const LOOPBACK_MTU: u16 = 65535;
 
 pub fn loopback_output(
-    dev: &mut net::NetDevice,
-    device_type: u16,
+    dev: &net::NetDevice,
+    protocol_type: net::NetProtocolType,
     data: &[u8],
     _dst: &[u8],
-) -> Result<(), i32> {
+) -> Result<(), microps::NetError> {
     crate::log_debug!(
-        "loopback_output: dev={}, type={:#06x}, len={}",
+        "loopback_output: dev={}, protocol_type={:#06x}, len={}",
         dev.name(),
-        device_type,
+        protocol_type,
         data.len()
     );
     crate::debugdump!(data);
 
-    net::net_input(device_type, data, dev)
+    net::net_input(protocol_type, data, dev)
 }
 
 #[allow(non_upper_case_globals)]
@@ -26,7 +30,7 @@ static loopback_ops: net::NetDeviceOps = net::NetDeviceOps {
     output: Some(loopback_output),
 };
 
-pub fn loopback_init() -> Result<(), i32> {
+pub fn loopback_init() -> Result<(), microps::NetError> {
     let mut dev = net_device_alloc();
     // Box でヒープ上のメモリ領域に対するアドレスの
     // 所有権を持たせており、null にはならないはず
@@ -37,20 +41,15 @@ pub fn loopback_init() -> Result<(), i32> {
 
     dev.device_type = net::NET_DEVICE_TYPE_LOOPBACK;
     dev.mtu = LOOPBACK_MTU;
-    dev.flags = net::NET_DEVICE_FLAG_LOOPBACK;
+    dev.set_flags(net::NET_DEVICE_FLAG_LOOPBACK);
     dev.hlen = 0;
     dev.alen = 0;
     dev.ops = Some(&loopback_ops);
 
     // ループバックデバイスを登録
     // 所有権はスタック側に移り、代わりに 'static な参照が返る
-    let dev = match net_device_register(dev) {
-        Ok(dev) => dev,
-        Err(e) => {
-            crate::log_error!("loopback_init: net_device_register() failed");
-            return Err(e);
-        }
-    };
+    let dev = net_device_register(dev)
+        .inspect_err(|e| crate::log_trace!("loopback_init: net_device_register() failed: {e}"))?;
 
     crate::log_info!("loopback_init: success, dev={}", dev.name());
     Ok(())
