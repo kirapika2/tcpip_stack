@@ -1,10 +1,11 @@
 //! ネットワーク全般
 //!
 //! ネットワークデバイスおよびプロトコルの管理
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, LazyLock, RwLock};
 
 use crate::microps::{ip, NetError};
 use crate::Platform;
@@ -23,7 +24,7 @@ pub const NET_DEVICE_ADDR_LEN: usize = 16;
 
 /// プロトコル種別 (EtherType)
 /// 16bit ネットワークバイトオーダー (ビッグエンディアン)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct NetProtocolType(u16);
 
@@ -43,6 +44,9 @@ impl std::fmt::LowerHex for NetProtocolType {
         std::fmt::LowerHex::fmt(&self.0, f) // フォーマットは u16 に委譲
     }
 }
+
+/// プロトコルの入力処理
+pub type NetProtocolHandler = fn(data: &[u8], dev: &NetDevice);
 
 /// ネットワークデバイス
 ///
@@ -81,30 +85,6 @@ impl NetDevice {
     }
 }
 
-/// デバイスドライバの制御ルーチン
-pub struct NetDeviceOps {
-    pub open: Option<fn(dev: &NetDevice) -> Result<(), NetError>>,
-    pub close: Option<fn(dev: &NetDevice) -> Result<(), NetError>>,
-    pub output: Option<
-        fn(
-            dev: &NetDevice,
-            protocol_type: NetProtocolType,
-            data: &[u8],
-            dst: &[u8],
-        ) -> Result<(), NetError>,
-    >,
-}
-
-/// ネットワークプロトコル
-struct NetProtocol {
-    next: *mut NetProtocol,
-    pub protocol_type: NetProtocolType,
-    pub handler: NetProtocolHandler,
-}
-
-/// プロトコルの入力処理
-pub type NetProtocolHandler = fn(data: &[u8], dev: &NetDevice);
-
 // Rust ベースでデフォルト値を設定
 // private_data など、サイズ不定のフィールドを持つため、Box を使ってヒープ上に確保する必要がある
 // 先にデフォルト値を設定してから、フィールドの値を埋める
@@ -136,13 +116,30 @@ impl NetDevice {
     }
 }
 
+/// デバイスドライバの制御ルーチン
+pub struct NetDeviceOps {
+    pub open: Option<fn(dev: &NetDevice) -> Result<(), NetError>>,
+    pub close: Option<fn(dev: &NetDevice) -> Result<(), NetError>>,
+    pub output: Option<
+        fn(
+            dev: &NetDevice,
+            protocol_type: NetProtocolType,
+            data: &[u8],
+            dst: &[u8],
+        ) -> Result<(), NetError>,
+    >,
+}
+
 // 登録済みのデバイスの一覧
 // デバイスの実体はヒープ上に固定 (leak) されており、その共有参照を持つ
 #[allow(non_upper_case_globals)]
 static devices: RwLock<Vec<Arc<NetDevice>>> = RwLock::new(Vec::new());
 
+// 登録済みのネットワークプロトコル
+// HashMap は const な関数でないため、LazyLock を使って評価を遅延させる
 #[allow(non_upper_case_globals)]
-static mut protocols: *mut NetProtocol = std::ptr::null_mut(); // 最初のプロトコルの生ポインタ
+static protocols: LazyLock<RwLock<HashMap<NetProtocolType, NetProtocolHandler>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// ネットワークデバイスの割り当て
 pub fn net_device_alloc() -> NetDevice {
@@ -283,39 +280,27 @@ pub fn net_protocol_register(
     protocol_type: NetProtocolType,
     handler: NetProtocolHandler,
 ) -> Result<(), NetError> {
-    let protocol = Box::new(NetProtocol {
-        next: std::ptr::null_mut(),
-        protocol_type,
-        handler,
-    });
+    let mut protocol_map = protocols.write().unwrap();
 
-    // 生ポインタを触るので unsafe
-    unsafe {
-        let mut proto = protocols;
+    match protocol_map.entry(protocol_type) {
         // すでに登録されているプロトコルかどうかを確認
-        while !proto.is_null() {
-            if (*proto).protocol_type == protocol_type {
-                crate::log_error!(
-                    "net_protocol_register: already registered, protocol_type={:#06x}",
-                    protocol_type
-                );
-                return Err(NetError::ProtocolAlreadyRegistered);
-            }
-            proto = (*proto).next;
+        Entry::Occupied(_) => {
+            crate::log_error!(
+                "net_protocol_register: already registered, protocol_type={:#06x}",
+                protocol_type
+            );
+            return Err(NetError::ProtocolAlreadyRegistered);
+        }
+        // 新規登録
+        Entry::Vacant(entry) => {
+            entry.insert(handler);
+            crate::log_info!(
+                "net_protocol_register: success, protocol_type={:#06x}",
+                protocol_type
+            );
+            Ok(())
         }
     }
-
-    // プロトコルを登録
-    let raw = Box::into_raw(protocol);
-    unsafe {
-        (*raw).next = protocols;
-        protocols = raw;
-    }
-    crate::log_info!(
-        "net_protocol_register: success, protocol_type={:#06x}",
-        protocol_type
-    );
-    Ok(())
 }
 
 /// ネットワークデバイスからのデータ入力
@@ -332,17 +317,18 @@ pub fn net_input(
     );
     crate::debugdump!(data);
 
-    unsafe {
-        let mut proto = protocols;
-        while !proto.is_null() {
-            if (*proto).protocol_type == protocol_type {
-                ((*proto).handler)(data, dev);
-                return Ok(());
-            }
-            proto = (*proto).next;
-        }
+    let handler = {
+        // ロックはハンドラ取得までの間のみ保持
+        let protocol_map = protocols.read().unwrap();
+        protocol_map.get(&protocol_type).copied()
+    };
+
+    // プロトコルの処理を行う
+    if let Some(handler) = handler {
+        handler(data, dev);
     }
-    /* サポートされていないプロトコルの場合 */
+
+    /* サポートされていないプロトコルもそのまま Ok */
     Ok(())
 }
 
