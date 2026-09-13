@@ -73,7 +73,9 @@ impl NetDevice {
     pub fn is_up(&self) -> bool {
         self.flags.load(Ordering::Relaxed) & NET_DEVICE_FLAG_UP != 0
     }
-    pub fn state(&self) -> &str {
+    /// ネットワークデバイスの状態を文字列で返す
+    /// 文字列のライフタイムは NetDevice に依存するものではないので 'static とする
+    pub fn state(&self) -> &'static str {
         if self.is_up() {
             "UP"
         } else {
