@@ -262,8 +262,8 @@ pub fn net_device_output_by_name(
         // list のロックはこのスコープ内でのみ保持し、参照を返す
         let list = devices.read().unwrap();
         list.iter()
-            .cloned()
             .find(|dev| dev.name().as_bytes() == name)
+            .cloned() // 見つかったデバイスの参照カウンタを増やして同じ NetDevice を指す新しい Arc を返す
     };
 
     match dev {
