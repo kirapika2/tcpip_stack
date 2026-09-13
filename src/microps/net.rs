@@ -32,9 +32,11 @@ impl NetProtocolType {
     pub const IP: Self = Self(0x0800);
     pub const ARP: Self = Self(0x0806);
     pub const IPV6: Self = Self(0x86dd);
+}
 
+impl From<u16> for NetProtocolType {
     /// 読み取った値を `NetProtocolType` として解釈する
-    pub const fn from_u16(value: u16) -> Self {
+    fn from(value: u16) -> Self {
         Self(value)
     }
 }
