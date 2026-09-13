@@ -134,6 +134,45 @@ pub struct NetDeviceOps {
     >,
 }
 
+impl NetDeviceOps {
+    /// open 未実装時は処理不要として Ok
+    pub fn open(&self, dev: &NetDevice) -> Result<(), NetError> {
+        if let Some(open) = self.open {
+            open(dev)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// close 未実装時は処理不要として Ok
+    pub fn close(&self, dev: &NetDevice) -> Result<(), NetError> {
+        if let Some(close) = self.close {
+            close(dev)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// output 未実装時は処理必須として Err
+    pub fn output(
+        &self,
+        dev: &NetDevice,
+        protocol_type: NetProtocolType,
+        data: &[u8],
+        dst: &[u8],
+    ) -> Result<(), NetError> {
+        if let Some(output) = self.output {
+            output(dev, protocol_type, data, dst)
+        } else {
+            crate::log_error!(
+                "NetDeviceOps::output: output callback function is not set, dev={}",
+                dev.name()
+            );
+            Err(NetError::OutputNotSupported)
+        }
+    }
+}
+
 // 登録済みのデバイスの一覧
 // デバイスの実体はヒープ上に固定 (leak) されており、その共有参照を持つ
 #[allow(non_upper_case_globals)]
@@ -183,23 +222,33 @@ pub fn net_device_register(mut dev: NetDevice) -> Result<Arc<NetDevice>, NetErro
 }
 
 /// ネットワークデバイスの起動
-fn net_device_open(dev: &NetDevice) {
+fn net_device_open(dev: &NetDevice) -> Result<(), NetError> {
     crate::log_info!("net_device_open: dev={}", dev.name());
     if dev.is_up() {
-        crate::log_info!("net_device_open: already opened, dev={}", dev.name());
-        return;
+        crate::log_error!("net_device_open: already opened, dev={}", dev.name());
+        return Ok(());
+    }
+    // デバイス操作が設定されていれば起動処理
+    if let Some(ops) = dev.ops {
+        ops.open(dev)?;
     }
     dev.flags.fetch_or(NET_DEVICE_FLAG_UP, Ordering::Relaxed); // フラグを立てる
+    Ok(())
 }
 
 /// ネットワークデバイスの停止
-fn net_device_close(dev: &NetDevice) {
+fn net_device_close(dev: &NetDevice) -> Result<(), NetError> {
     crate::log_info!("net_device_close: dev={}", dev.name());
     if !dev.is_up() {
         crate::log_error!("net_device_close: already closed, dev={}", dev.name());
-        return;
+        return Ok(());
+    }
+    // デバイス操作が設定されていれば停止処理
+    if let Some(ops) = dev.ops {
+        ops.close(dev)?;
     }
     dev.flags.fetch_and(!NET_DEVICE_FLAG_UP, Ordering::Relaxed); // フラグを下げる
+    Ok(())
 }
 
 /// ネットワークデバイスへデータ出力
@@ -233,25 +282,16 @@ fn net_device_output(
     }
 
     // 制御ルーチンを使ってデータ出力
-    match dev.ops {
-        Some(ops) => match ops.output {
-            Some(output) => output(dev, protocol_type, data, dst),
-            None => {
-                crate::log_error!(
-                    "net_device_output: ops.output is not supported, dev={}",
-                    dev.name()
-                );
-                Err(NetError::OutputNotSupported)
-            }
-        },
-        None => {
-            crate::log_error!(
-                "net_device_output: device operations are not set, dev={}",
-                dev.name()
-            );
-            Err(NetError::OperationsNotSet)
-        }
+    if let Some(ops) = dev.ops {
+        ops.output(dev, protocol_type, data, dst)?;
+    } else {
+        crate::log_error!(
+            "net_device_output: device operations are not set, dev={}",
+            dev.name()
+        );
+        return Err(NetError::OperationsNotSet);
     }
+    Ok(())
 }
 
 /// デバイス名を指定してデータ出力
@@ -359,7 +399,7 @@ pub fn net_run() -> Result<(), NetError> {
             // 順にデバイスを起動
             let list = devices.read().unwrap().clone();
             for dev in list {
-                net_device_open(&dev);
+                net_device_open(&dev)?;
             }
             crate::log_info!("net_run: success");
             Ok(())
@@ -379,7 +419,7 @@ pub fn net_shutdown() -> Result<(), NetError> {
             // 順にデバイスを停止
             let list = devices.read().unwrap().clone();
             for dev in list {
-                net_device_close(&dev);
+                net_device_close(&dev)?;
             }
             crate::log_info!("net_shutdown: success");
             Ok(())
