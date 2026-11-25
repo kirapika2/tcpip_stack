@@ -1,0 +1,24 @@
+name: Build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # build.rs で C ソースをコンパイルするために gcc が必要 (ubuntu-latest には標準で入っている)
+      - name: Build (default features)
+        run: cargo build --locked
+
+      - name: Build (all features)
+        run: cargo build --locked --all-features
