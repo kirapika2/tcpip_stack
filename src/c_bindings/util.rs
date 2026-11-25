@@ -1,4 +1,4 @@
-// Rust側で利用するログ機能
+//! Rust側で利用するログ機能
 
 use std::io::{self, Write};
 use std::sync::Mutex;
@@ -14,6 +14,8 @@ pub enum LogLevel {
     Warning = b'W',
     Info = b'I',
     Debug = b'D',
+    /// エラーの伝播経路を追うための専用レベル
+    Trace = b'T',
 }
 
 /// ログを標準エラー出力に出力する（C実装と同等）
@@ -97,6 +99,39 @@ macro_rules! log_debug {
             "",
             &format!($($arg)*)
         );
+    }};
+}
+
+/// エラーの伝播経路を出力（`log_trace` フィーチャ有効時）
+///
+/// `?` で素通しする場所に「どの経路を通って発生したか」確認するために置く
+/// 失敗の原因そのものは発生地点が `log_error!` で報告済み
+#[cfg(feature = "log_trace")]
+#[macro_export]
+macro_rules! log_trace {
+    ($($arg:tt)*) => {{
+        $crate::c_bindings::util::lprintf(
+            $crate::c_bindings::util::LogLevel::Trace,
+            file!(),
+            line!(),
+            "",
+            &format!($($arg)*)
+        );
+    }};
+}
+
+/// エラーの伝播経路を出力（`log_trace` フィーチャ無効時）
+///
+/// 何も出力しない
+/// `if false` で囲うことで引数は実行時に評価されないが、型検査だけは通る
+/// 呼び出し側で未使用変数の警告が出るのを防げる
+#[cfg(not(feature = "log_trace"))]
+#[macro_export]
+macro_rules! log_trace {
+    ($($arg:tt)*) => {{
+        if false {
+            let _ = format_args!($($arg)*);
+        }
     }};
 }
 

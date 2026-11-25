@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+# 16 進ダンプ (debugdump!) を有効化
 hexdump = []
+# エラー伝播トレース (log_trace!) を有効化
+log_trace = []
 
 [dependencies]
 libc = "0.2.189"
